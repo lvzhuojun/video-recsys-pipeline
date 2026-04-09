@@ -1,0 +1,29 @@
+# Core deep learning
+# RTX 5060 (Blackwell, sm_120) requires PyTorch cu128 build
+# Install with: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+torch==2.11.0+cu128
+torchvision==0.26.0+cu128
+
+# Data processing
+numpy==2.2.6
+pandas==2.3.3
+scikit-learn==1.7.2
+scipy==1.15.3
+
+# Training utilities
+tqdm==4.67.3
+tensorboard==2.20.0
+pyyaml==6.0.3
+
+# Retrieval
+faiss-cpu==1.13.2
+# Note: faiss-gpu not available on Windows via pip; use faiss-cpu
+
+# Visualization & demo
+matplotlib==3.10.8
+seaborn==0.13.2
+gradio==6.11.0
+
+# Notebooks
+jupyter==1.1.1
+ipykernel==7.2.0
