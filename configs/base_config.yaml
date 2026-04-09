@@ -1,0 +1,35 @@
+# Base configuration shared across all modules.
+# All hyperparameters live in YAML — never hardcode numbers in model files.
+
+project:
+  name: video-recsys-pipeline
+  seed: 42
+
+data:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  # Mock dataset dimensions (matching KuaiRec schema)
+  n_users: 500
+  n_items: 1000
+  n_interactions: 15000
+  n_categories: 20
+  # Sequence feature: how many past interactions to include
+  sequence_length: 20
+  # watch_ratio >= pos_threshold → positive label
+  pos_threshold: 0.7
+  # Train / val / test split ratios (by timestamp)
+  val_ratio: 0.1
+  test_ratio: 0.1
+
+features:
+  # User dense feature dimension: 5 activity stats + 20 category prefs
+  user_dense_dim: 25
+  # Item dense feature dimension: hist_ctr + like_rate + log_popularity
+  item_dense_dim: 3
+  # Number of duration buckets (0–4)
+  n_duration_buckets: 5
+
+logging:
+  log_dir: experiments/logs
+  checkpoint_dir: experiments/checkpoints
+  results_dir: experiments/results
