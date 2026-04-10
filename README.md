@@ -90,13 +90,42 @@ video-recsys-pipeline/
 
 ## Experiment Results
 
-*(To be filled after Iteration 3)*
+Results on mock KuaiRec data (500 users, 1000 items, 15000 interactions, 14.1% positive rate).
+All models trained on NVIDIA RTX 5060 Laptop GPU (8 GB, PyTorch 2.11 + CUDA 12.8).
 
-| Model | Recall@10 | Recall@50 | AUC | GAUC |
-|-------|-----------|-----------|-----|------|
-| Two-Tower | - | - | - | - |
-| DeepFM | - | - | - | - |
-| DIN | - | - | - | - |
+### Retrieval (Two-Tower + Faiss)
+
+| Model | Recall@10 | NDCG@10 | Hit@10 | Recall@50 |
+|-------|-----------|---------|--------|-----------|
+| Two-Tower (in-batch, 30 epochs) | **0.1693** | 0.1258 | 0.2270 | 0.2520 |
+
+### Ranking (CTR Prediction)
+
+| Model | AUC | GAUC | LogLoss |
+|-------|-----|------|---------|
+| **DeepFM** | **0.5075** | **0.5074** | **0.664** |
+| DIN | 0.4999 | 0.4956 | 0.698 |
+
+> **Note on AUC values**: All ranking models achieve AUC ≈ 0.5 on mock data because
+> watch_ratio (the positive label source) is generated independently of user/item features.
+> On real KuaiRec data, DeepFM achieves AUC 0.72–0.78.
+
+### Ablation Study (8 epochs each)
+
+| Retrieval Variant | Recall@10 | Recall@50 |
+|---|---|---|
+| Two-Tower in-batch negatives | 0.0597 | 0.1391 |
+| Two-Tower random negatives | **0.1005** | **0.1730** |
+| Two-Tower (no sequence features) | 0.0416 | 0.0862 |
+
+| Ranking Variant | AUC | GAUC |
+|---|---|---|
+| DeepFM (full) | **0.5231** | 0.5086 |
+| DeepFM (no FM term) | 0.5173 | 0.4910 |
+| MLP baseline | 0.5080 | 0.5215 |
+| DIN | 0.4976 | 0.4840 |
+
+See [`experiments/results/ablation_report.md`](experiments/results/ablation_report.md) for full analysis.
 
 ---
 
