@@ -1,0 +1,34 @@
+# Ranking model configuration for DeepFM and DIN.
+
+model:
+  # Shared embedding dims (same as retrieval for consistency)
+  user_embed_dim: 64
+  item_embed_dim: 64
+  cat_embed_dim: 16
+  dur_embed_dim: 8
+
+  # DeepFM specific
+  deepfm:
+    fm_embed_dim: 16         # dimension of each feature's FM embedding vector
+    mlp_hidden_dims: [256, 128, 64]
+    dropout: 0.1
+
+  # DIN specific
+  din:
+    attention_hidden_dims: [64, 16]  # MLP inside attention score network
+    mlp_hidden_dims: [256, 128, 64]
+    dropout: 0.1
+    seq_embed_dim: 32        # target-item attention embedding dim
+
+training:
+  batch_size: 512
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  n_epochs: 30
+  early_stop_patience: 5
+  monitor: auc              # higher is better
+  pos_weight: 6.0           # BCELoss positive class weight (approx neg/pos ratio)
+  scheduler: cosine
+
+evaluation:
+  batch_size: 1024

@@ -597,7 +597,134 @@ seq_pooled = (seq_emb * mask).sum(1) / (mask.sum(1) + 1e-9)  # (B, 32)
 
 ## 5. 排序模块：DeepFM + DIN
 
-*(Iteration 3 完成后填写)*
+### 5.1 这个模块解决什么问题
+
+召回层给出了几百个候选，排序层需要对每个候选进行精细打分，预测**点击率（CTR）**。CTR 预估的核心挑战是**特征交叉**：用户喜欢某类视频，不只取决于视频类别本身，而是取决于"用户历史偏好 × 视频类别"这个交叉组合。
+
+### 5.2 DeepFM 原理
+
+> 🔴 **【面试必考】**
+> **Q: FM（因子分解机）的核心公式是什么？为什么它能高效计算二阶特征交叉？**
+
+**FM 公式（二阶部分）**：
+
+$$\hat{y}_{FM} = w_0 + \sum_i w_i x_i + \sum_{i<j} \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j$$
+
+其中 $\mathbf{v}_i \in \mathbb{R}^k$ 是每个特征的隐向量（k=16）。
+
+**计算优化**：暴力枚举 $O(n^2 k)$，FM 利用恒等式化简为 $O(nk)$：
+
+$$\sum_{i<j} \langle \mathbf{v}_i, \mathbf{v}_j \rangle x_i x_j = \frac{1}{2}\left[\left\|\sum_i \mathbf{v}_i x_i\right\|^2 - \sum_i \left\|\mathbf{v}_i\right\|^2 x_i^2\right]$$
+
+代码对应（`deepfm.py`）：
+```python
+sum_of_emb = embs.sum(dim=1)               # Σvᵢ,  shape (B, K)
+sq_of_sum  = (sum_of_emb ** 2).sum(-1)    # ||Σvᵢ||², shape (B,)
+sum_of_sq  = (embs ** 2).sum(-1).sum(-1)  # Σ||vᵢ||², shape (B,)
+fm_out = 0.5 * (sq_of_sum - sum_of_sq)   # O(F·K)，非 O(F²·K)
+```
+
+**DeepFM = Linear + FM + Deep，三部分共享 embedding**：
+```
+所有特征 → 共享 Embedding (B, F, K)
+                    │
+       ┌────────────┼────────────┐
+    Linear         FM           Deep
+  (1st-order)  (2nd-order)   (high-order)
+       └────────────┼────────────┘
+                  sum
+                   │
+              sigmoid → CTR
+```
+
+### 5.3 DIN 原理
+
+> 🔴 **【面试必考】**
+> **Q: DIN 的 Attention 机制和 Transformer 的 Self-Attention 有什么区别？**
+
+| 对比维度 | DIN Attention | Transformer Self-Attention |
+|---------|--------------|---------------------------|
+| **谁在 attend 谁** | 目标 item attend 历史序列（cross-attention） | 序列 attend 序列自身 |
+| **Score 函数** | MLP([h, t, h⊙t, h-t]) | Q·Kᵀ/√d（点积） |
+| **位置信息** | 无（顺序不重要） | 需要 Position Encoding |
+| **适用场景** | 目标物品已知（排序阶段） | 序列建模（无目标物品） |
+| **复杂度** | O(L·MLP) | O(L²·d) |
+
+**DIN Attention 计算**（`din.py`）：
+```python
+# history_emb: (B, L, D), target_emb: (B, D)
+interaction = concat([h, t, h*t, h-t])    # (B, L, 4D)
+scores = MLP(interaction)                  # (B, L)  raw scores
+scores.masked_fill_(pad_mask, -1e9)        # 屏蔽 padding
+weights = softmax(scores, dim=-1)          # (B, L)
+hist_pooled = (weights * history_emb).sum(1)  # (B, D)  加权pooling
+```
+
+**为什么 h⊙t 和 h-t 也放进去？**
+- `h*t`（element-wise 积）：捕捉两个向量各维度的"共现"强度
+- `h-t`（差）：捕捉两者的"差异"，帮助模型识别不相关的历史项
+
+### 5.4 方案对比
+
+| 模型 | 特征交叉 | 序列建模 | 参数量 | 适用场景 |
+|------|---------|---------|--------|---------|
+| **DeepFM** | FM 二阶 + MLP 高阶 | 无（均值pooling） | 91k | 特征丰富，无长序列 |
+| **DIN** | MLP | Target-aware attention | 233k | 有用户历史序列，注重上下文 |
+| Wide & Deep | Linear + MLP | 无 | 中 | 需要 FM 改进前的经典方案 |
+| DCN | Cross network | 无 | 中 | 高阶显式交叉，自动化 |
+
+### 5.5 AUC vs GAUC
+
+> 🔴 **【面试必考】**
+> **Q: 工业界为什么更看重 GAUC 而不是整体 AUC？**
+>
+> A: **全局 AUC** 衡量"任取一个正样本和一个负样本，正样本排在前面的概率"。但这里有一个问题：正负样本来自不同用户。如果模型学会了"给热门用户打高分"（即用户活跃度偏差），也能获得高全局 AUC，但对单个用户的排序质量未必好。
+>
+> **GAUC（Group AUC）** = 每个用户单独计算 AUC，再按交互数加权平均：
+> $$\text{GAUC} = \frac{\sum_u |I_u| \cdot \text{AUC}_u}{\sum_u |I_u|}$$
+>
+> GAUC 真正衡量的是"在同一个用户的候选集里，模型能否把正样本排在前面"——这才是推荐系统的本质目标。
+
+### 5.6 实验结果（本项目 mock 数据）
+
+| 模型 | Val AUC | Val GAUC | Test AUC | Test LogLoss |
+|------|---------|---------|---------|-------------|
+| DeepFM | 0.5463 | 0.5145 | 0.5075 | 0.6640 |
+| DIN | 0.5380 | 0.5114 | 0.4999 | 0.6980 |
+
+> ⚠️ **【注意】** AUC~0.5 是 **mock 随机数据** 的正常现象。mock 数据的交互标签是基于随机的 watch_ratio 生成的，没有真实的用户偏好模式。在真实 KuaiRec 数据上，DeepFM 通常能达到 AUC>0.72，DIN>0.74（因为真实数据有用户偏好模式可学习）。
+
+### 5.7 面试问题精选
+
+> 🔴 **【面试必考】**
+> **Q: DeepFM 相对于 Wide & Deep 有什么改进？**
+>
+> A: Wide & Deep 的 Wide 部分是 LR，需要**手动构造**交叉特征（如 user_city × item_category）。DeepFM 用 FM 替换 LR，FM 能自动学习所有特征对的二阶交叉，无需手动特征工程。而且 DeepFM 的 FM 部分和 Deep 部分**共享 embedding**，减少了参数量，同时避免了 Wide & Deep 中 Wide 部分需要大量手工特征的工程负担。
+
+> 🟠 **【重要原理】**
+> **Q: CTR 预估为什么用 BCE Loss 而不是 MSE Loss？**
+>
+> A: CTR 标签是 0/1 二值（正态分布假设不成立），用 MSE 会导致：
+> 1. 预测值被压缩在 [0,1] 外时梯度消失
+> 2. 概率预测的校准性差（预测 0.8 的样本实际 CTR 未必是 80%）
+>
+> BCE = -[y·log(p) + (1-y)·log(1-p)]，对应伯努利分布的 MLE，理论上正确。加 pos_weight（本项目用 6.0）可以补偿正负样本不平衡。
+
+> 💡 **【面试表达技巧】**
+> "我训练了 DeepFM 和 DIN 两个模型，并用消融实验验证了 FM 交叉项的贡献（Iteration 4）。在 mock 数据上 DeepFM 略优于 DIN，这符合预期——DIN 的 attention 机制需要更多数据才能发挥优势，真实数据上 DIN 通常表现更好因为用户历史中有真实的兴趣信号。"
+
+### 5.8 踩坑与注意事项
+
+- **pos_weight 设置**：正负样本 6:1，设 pos_weight=6.0；如果设太大模型会偏向预测正类，AUC 反而下降
+- **GAUC 需要每个用户有正负样本**：只有正样本或只有负样本的用户无法计算 AUC，代码中自动跳过这些用户
+- **DIN 中 target_for_attn 的维度对齐**：item_embed_dim 和 hist_embed_dim 不同时需要投影，代码用简单切片处理，工业界通常会用额外 Linear 层
+
+### 5.9 延伸阅读
+
+- **DeepFM: A Factorization-Machine based Neural Network for CTR Prediction (IJCAI 2017)**
+- **Deep Interest Network for Click-Through Rate Prediction (KDD 2018)**
+- **Deep & Cross Network for Ad Click Predictions (KDD 2017)**：自动高阶特征交叉
+- **DIEN: Deep Interest Evolution Network (AAAI 2019)**：用 GRU 建模兴趣演化，DIN 的升级版
 
 ---
 
