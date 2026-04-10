@@ -1,0 +1,30 @@
+# Two-Tower retrieval model configuration.
+# All model hyperparameters are defined here — never hardcode in model files.
+
+model:
+  embed_dim: 64          # user_id / item_id embedding dimension
+  seq_embed_dim: 32      # sequence history item embedding dimension
+  cat_embed_dim: 16      # video category embedding dimension
+  dur_embed_dim: 8       # duration bucket embedding dimension
+  dense_hidden: 32       # projection dim for dense (stat) features
+  output_dim: 64         # final L2-normalized tower output dimension
+  temperature: 0.07      # InfoNCE temperature (lower → sharper distribution)
+  dropout: 0.1
+
+training:
+  batch_size: 128        # in-batch negatives: each sample has (batch_size-1) negatives
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  n_epochs: 30
+  early_stop_patience: 5
+  monitor: recall@10     # metric to monitor for early stopping (higher is better)
+  scheduler: cosine      # 'none' or 'cosine'
+
+evaluation:
+  top_k: [10, 50]
+  encode_batch_size: 512
+
+faiss:
+  index_type: flat       # 'flat' (exact, IndexFlatIP) or 'ivfflat' (approximate)
+  n_lists: 50            # IVFFlat: number of Voronoi cells
+  n_probe: 10            # IVFFlat: cells to probe at query time (speed/quality tradeoff)

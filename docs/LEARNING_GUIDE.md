@@ -423,7 +423,175 @@ for idx, row in enumerate(split_df.itertuples()):
 
 ## 4. 召回模块：双塔模型 + Faiss
 
-*(Iteration 2 完成后填写)*
+### 4.1 这个模块解决什么问题
+
+召回层要在**毫秒级**从百万/亿级物品库中筛出几百个候选。直觉上，只要能把用户和物品都映射到同一个向量空间，就可以用向量检索（Faiss）完成高效的最近邻搜索，而不需要对每个物品都做复杂的前向计算。
+
+这就是**双塔（Two-Tower）**思想的核心：**用户和物品分别独立编码，然后用内积衡量相似度**。
+
+### 4.2 核心原理
+
+**目标**：学习两个函数 $f_u(\cdot)$ 和 $f_i(\cdot)$，使得用户喜欢的物品在向量空间中距离更近。
+
+$$\text{score}(u, i) = \langle f_u(x_u), f_i(x_i) \rangle = \cos(f_u(x_u), f_i(x_i))$$
+
+（两个向量都做 L2 归一化后，内积等于余弦相似度）
+
+**InfoNCE 损失（In-Batch 负采样）**：
+
+对于 batch 中的 $B$ 个正样本对 $\{(u_1,i_1), \ldots, (u_B,i_B)\}$，构造 $B \times B$ 相似度矩阵：
+
+$$S_{jk} = \frac{f_u(x_{u_j})^T f_i(x_{i_k})}{\tau}$$
+
+其中 $\tau$ 为温度超参（默认 0.07）。Loss 对角线为正样本，其余为负样本：
+
+$$\mathcal{L} = -\frac{1}{B}\sum_{j=1}^B \log \frac{e^{S_{jj}}}{\sum_{k=1}^B e^{S_{jk}}}$$
+
+> 🔴 **【面试必考】**
+> **Q: L2 归一化有什么作用？不归一化会怎样？**
+>
+> A: L2 归一化将所有向量投影到单位球面上，这样内积直接等于余弦相似度（消除了向量模长的影响）。
+> 不归一化的后果：
+> 1. 模长大的物品/用户embedding天然得分更高，模型可能靠"学大模长"而非真正的相似性来提高训练分数
+> 2. Faiss的内积检索和余弦检索结果不一致，不好对比
+> 3. 训练不稳定，尤其在batch内负采样时
+>
+> 代码对应位置：`F.normalize(out, p=2, dim=-1)` 是 UserTower 和 ItemTower 输出层的最后一行。
+
+### 4.3 本项目架构设计
+
+```
+UserTower                          ItemTower
+─────────────────────              ─────────────────────────────
+user_id → Embedding(500, 64)       item_id → Embedding(1000, 64)
+                                   category → Embedding(20, 16)
+history_seq → Embedding(1001, 32)  duration_bkt → Embedding(5, 8)
+  → Masked Mean Pooling
+user_dense(25) → Linear → ReLU     item_dense(3) → Linear → ReLU
+                                               ↓
+concat [64+32+32=128]              concat [64+16+8+32=120]
+  → MLP(128→256→128→64)              → MLP(120→256→128→64)
+  → L2 Normalize                     → L2 Normalize
+         ↓                                   ↓
+    user_emb (64,)                    item_emb (64,)
+                   ↘               ↙
+            Inner Product / Temperature
+                   → InfoNCE Loss
+```
+
+**实验结果（本项目 mock 数据）**：
+| 指标 | Val | Test |
+|------|-----|------|
+| Recall@10 | 0.1723 | 0.1693 |
+| NDCG@10 | 0.1263 | 0.1258 |
+| Recall@50 | 0.2365 | 0.2520 |
+
+### 4.4 方案对比
+
+| 方案 | 优势 | 劣势 | 适用场景 |
+|------|------|------|---------|
+| **双塔（本项目）** | 用户/物品可独立编码，serving 时只需编码用户 | 无法建模 user-item 交叉特征 | 大规模召回（推荐/搜索） |
+| 矩阵分解（MF） | 简单，有理论保证 | 只有 ID embedding，无法融入丰富特征 | 特征稀少的冷启动问题 |
+| 单塔（concat后过MLP） | 可建模交叉特征 | 物品不能离线计算，serving 延迟高 | 小规模精排 |
+| DSSM | 早期版本，结构类似双塔 | 特征处理能力弱 | 搜索相关性 |
+
+### 4.5 Faiss 索引选型
+
+| 索引类型 | 原理 | 召回率 | 速度 | 内存 | 适用规模 |
+|---------|------|--------|------|------|---------|
+| **Flat（本项目）** | 暴力枚举，精确内积 | 100% | 慢 | 低 | <100万 |
+| IVFFlat | 聚类+倒排索引 | ~98% | 快 | 中 | 100万-1亿 |
+| HNSW | 分层图索引 | ~99% | 最快 | 高 | 任意规模 |
+| PQ | 乘积量化压缩 | ~95% | 快 | 极低 | 内存受限 |
+
+> ⚠️ **【踩坑警告】**
+> IVFFlat 需要先 `train()`（K-means 聚类），然后才能 `add()`。如果直接 `add()` 会报错。Flat 不需要 train。本项目默认用 Flat（精确），代码中通过 `index_type` 参数切换。
+
+### 4.6 关键代码解析
+
+```python
+# two_tower.py - In-Batch 负采样 loss（最核心的代码）
+def in_batch_loss(self, user_emb, item_emb):
+    # user_emb: (B, 64)  item_emb: (B, 64)  — 都已 L2 归一化
+    sim = user_emb @ item_emb.T / self.temperature  # (B, B)
+    # sim[i][j] = user_i 与 item_j 的余弦相似度 / tau
+    # 对角线 sim[i][i] 是正样本，其余是负样本
+    labels = torch.arange(sim.size(0), device=sim.device)  # [0,1,2,...,B-1]
+    return F.cross_entropy(sim, labels)
+    # 等价于：对每行做 softmax，让正样本概率最大
+    # 一个 forward pass 处理了 B 个正样本 + B*(B-1) 个负样本
+
+# 序列 Masked Mean Pooling（处理变长序列）
+seq_emb = self.seq_embed(history_seq)      # (B, L, 32)
+mask = (history_seq > 0).float().unsqueeze(-1)  # (B, L, 1)，0 是 padding
+# 为什么不用 mean(dim=1)？
+# 因为 history_seq 右端是 padding(0)，直接 mean 会把 padding 纳入计算，
+# 相当于把"没有历史"的信号加进来，稀释了真实历史的影响
+seq_pooled = (seq_emb * mask).sum(1) / (mask.sum(1) + 1e-9)  # (B, 32)
+```
+
+### 4.7 面试问题精选
+
+> 🔴 **【面试必考】**
+> **Q: 双塔模型为什么一定要两个独立的塔，能不能把用户特征和物品特征 concat 后过一个塔？**
+>
+> A: 可以，但那就是单塔（Point-wise Ranking）而非双塔。两者的本质区别：
+> - **双塔**：user_emb 和 item_emb 可以**独立预计算**。物品库的 item_emb 可以离线算好存到 Faiss，serving 时只需算 user_emb（微秒级）。总体 serving 时间是 O(1) per request。
+> - **单塔**：每个 (user, item) 对都需要实时计算，serving 时间是 O(N_items)，亿级物品完全不可行。
+>
+> 这就是双塔能做召回、单塔只能做精排的本质原因。
+
+> 🔴 **【面试必考】**
+> **Q: In-batch 负采样的假负样本（false negative）问题是什么？怎么缓解？**
+>
+> A: 假设 batch 中 user_1 喜欢 item_3，而 item_3 也是 user_2 的正样本。在 in-batch loss 中，user_2 的正样本 item_2 把 item_3 当作负样本，但其实 user_2 对 item_3 是正的——这就是假负样本。
+>
+> 缓解方法：
+> 1. **logQ 修正**（Google 双塔论文）：负采样时减去物品出现频率的 log，高频物品被采中概率本就高，降低其负样本权重
+> 2. **过滤已知正例**：在构建 loss 时，如果 sim[i][j] 对应的 item_j 已知是 user_i 的正例，则从 loss 中排除
+> 3. **Hard negative mining**：后期训练时用难负样本替代 in-batch 负样本
+
+> 🟠 **【重要原理】**
+> **Q: Faiss 的 Flat 和 IVFFlat 的本质区别？**
+>
+> A: Flat 是暴力枚举，计算 query 与所有 item 的内积，时间复杂度 O(N·D)。IVFFlat 先用 K-means 把 item 分成 N_lists 个簇，搜索时只进入最近的 N_probe 个簇，复杂度约 O(N_probe/N_lists · N · D)。当 N_probe=N_lists 时退化为 Flat。工业界常用 HNSW（图索引），在 recall 和速度之间的 Pareto 前沿最优。
+
+> 🟡 **【加分项】**
+> **Q: 温度超参 τ 对训练有什么影响？**
+>
+> A: τ 控制 softmax 分布的"峰值"。
+> - τ 小（如 0.07）：分布更集中，梯度更大，更关注难负样本（接近正样本的负样本），收敛快但容易过拟合
+> - τ 大（如 1.0）：分布均匀，梯度小，训练稳定但收敛慢
+>
+> Google 的对比学习实验表明 τ∈[0.05, 0.1] 通常最优。有些工作把 τ 设为可学习参数（SimCLR）。
+
+> 💡 **【面试表达技巧】**
+> "我在双塔模型里实现了两种负采样方式：in-batch 和 random，并做了消融对比（Iteration 4）。In-batch 效果更好，原因是它天然包含了热门物品作为难负样本，但同时我注意到了假负样本问题，并在代码注释中记录了 logQ 修正的改进方向。"
+
+### 4.8 踩坑与注意事项
+
+- **drop_last=True**：In-batch loss 依赖固定的 batch size，最后一个不完整 batch 会导致 loss 计算错误，必须丢弃
+- **IVFFlat 必须先 train() 再 add()**：Flat 不需要 train；IVFFlat 的 train 实际上是做 K-means 聚类
+- **评估时用 last interaction 代表用户**：每个用户在 val 集有多行，取最后一行（历史最全）来编码用户向量更合理
+- **faiss-gpu 在 Windows 不可用**：本项目使用 faiss-cpu，10万以内候选集速度完全可接受
+
+### 4.9 本章学习优先级总结
+
+| 知识点 | 优先级 |
+|--------|--------|
+| 双塔 vs 单塔的本质区别（serving 时间复杂度） | 🔴 |
+| L2 归一化的作用 | 🔴 |
+| In-batch 负采样的 InfoNCE loss 推导 | 🔴 |
+| 假负样本问题与 logQ 修正 | 🟠 |
+| Faiss 索引类型选型 | 🟠 |
+| 序列 Masked Mean Pooling | 🟡 |
+| 温度超参的调节原则 | 🟡 |
+
+### 4.10 延伸阅读
+
+- **Sampling-Bias-Corrected Neural Modeling for Large Corpus Item Recommendations (RecSys 2019)**：Google 双塔 in-batch 负采样 + logQ 频率修正
+- **Approximate Nearest Neighbor Search under Neural Similarity Metric for Large-Scale Recommendation (CIKM 2020)**：工业界 Faiss 部署实践
+- **Efficient Natural Language Response Suggestion for Smart Reply (2017)**：DSSM 早期双编码器工作
 
 ---
 
