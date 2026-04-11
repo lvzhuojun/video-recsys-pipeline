@@ -3,13 +3,25 @@
 
 model:
   embed_dim: 64          # user_id / item_id embedding dimension
-  seq_embed_dim: 32      # sequence history item embedding dimension
+  seq_embed_dim: 32      # sequence history item embedding dimension (mean_pool mode)
   cat_embed_dim: 16      # video category embedding dimension
   dur_embed_dim: 8       # duration bucket embedding dimension
   dense_hidden: 32       # projection dim for dense (stat) features
   output_dim: 64         # final L2-normalized tower output dimension
   temperature: 0.07      # InfoNCE temperature (lower → sharper distribution)
   dropout: 0.1
+
+  # Sequence encoder: 'mean_pool' (default) or 'sasrec'
+  # Override at runtime: train_retrieval.py --seq_model sasrec
+  seq_model: mean_pool
+
+  # SASRec hyperparameters (only used when seq_model: sasrec)
+  sasrec:
+    hidden_dim: 64       # transformer hidden size; equals embed_dim for symmetric towers
+    n_layers: 2          # number of transformer blocks (2 is typical for short seqs)
+    n_heads: 2           # attention heads; must divide hidden_dim evenly
+    max_seq_len: 20      # must match data.seq_len in base_config.yaml
+    dropout: 0.1
 
 training:
   batch_size: 128        # in-batch negatives: each sample has (batch_size-1) negatives

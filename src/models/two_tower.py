@@ -1,7 +1,7 @@
 """Two-Tower (Dual Encoder) model for large-scale item retrieval.
 
 Architecture overview:
-  UserTower : user_id embedding  +  history sequence mean-pooling
+  UserTower : user_id embedding  +  history sequence encoder (mean-pooling or SASRec)
               +  user dense stats  →  MLP  →  L2-normalized (D,) vector
   ItemTower : item_id embedding  +  category embedding  +  duration embedding
               +  item dense stats  →  MLP  →  L2-normalized (D,) vector
@@ -9,6 +9,10 @@ Architecture overview:
 At serving time only the ItemTower needs to run offline to pre-compute item
 embeddings; user embeddings are computed online per request.  Inner product
 (= cosine similarity after L2 normalisation) drives the Faiss retrieval.
+
+Sequence encoder options (controlled by ``use_sasrec`` in UserTower):
+  mean_pool (default): masked mean pooling — simple, fast, order-agnostic
+  sasrec              : causal self-attention — order-aware, captures recency
 """
 
 from typing import Dict, List
@@ -17,6 +21,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from ..models.sasrec import SASRecEncoder
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -66,6 +71,14 @@ class UserTower(nn.Module):
 
     Output:
         (B, output_dim)  L2-normalised user embedding
+
+    Args:
+        use_sasrec:       If True, use SASRec causal self-attention for sequence
+                          encoding instead of masked mean pooling.
+        sasrec_hidden_dim: Hidden dim of the SASRec encoder (= sequence repr size).
+        sasrec_n_layers:  Number of transformer blocks in SASRec.
+        sasrec_n_heads:   Number of attention heads in SASRec.
+        max_seq_len:      Maximum sequence length (for SASRec positional embeddings).
     """
 
     def __init__(
@@ -78,19 +91,38 @@ class UserTower(nn.Module):
         dense_hidden: int,
         output_dim: int,
         dropout: float = 0.1,
+        use_sasrec: bool = False,
+        sasrec_hidden_dim: int = 64,
+        sasrec_n_layers: int = 2,
+        sasrec_n_heads: int = 2,
+        max_seq_len: int = 20,
     ) -> None:
         super().__init__()
+        self.use_sasrec = use_sasrec
         self.user_embed = nn.Embedding(n_users, embed_dim)
-        # seq_embed uses n_items+1 rows so that 0 (padding) has its own zero row
-        self.seq_embed = nn.Embedding(n_items + 1, seq_embed_dim, padding_idx=0)
         self.dense_proj = nn.Linear(user_dense_dim, dense_hidden)
 
-        in_dim = embed_dim + seq_embed_dim + dense_hidden
+        if use_sasrec:
+            self.seq_encoder = SASRecEncoder(
+                n_items=n_items,
+                hidden_dim=sasrec_hidden_dim,
+                max_seq_len=max_seq_len,
+                n_layers=sasrec_n_layers,
+                n_heads=sasrec_n_heads,
+                dropout=dropout,
+            )
+            seq_out_dim = sasrec_hidden_dim
+        else:
+            # seq_embed uses n_items+1 rows so that 0 (padding) has its own zero row
+            self.seq_embed = nn.Embedding(n_items + 1, seq_embed_dim, padding_idx=0)
+            nn.init.normal_(self.seq_embed.weight, std=0.01)
+            seq_out_dim = seq_embed_dim
+
+        in_dim = embed_dim + seq_out_dim + dense_hidden
         self.mlp = MLP([in_dim, 256, 128, output_dim], dropout=dropout)
         self.output_dim = output_dim
 
         nn.init.normal_(self.user_embed.weight, std=0.01)
-        nn.init.normal_(self.seq_embed.weight, std=0.01)
 
     def forward(
         self,
@@ -101,19 +133,23 @@ class UserTower(nn.Module):
     ) -> torch.Tensor:
         u_emb = self.user_embed(user_id)                          # (B, E)
 
-        # Masked mean pooling — ignore padding tokens (value 0)
-        seq_emb = self.seq_embed(history_seq)                     # (B, L, SE)
-        mask = (history_seq > 0).float().unsqueeze(-1)            # (B, L, 1)
-        seq_pooled = (seq_emb * mask).sum(1) / (mask.sum(1) + 1e-9)  # (B, SE)
+        if self.use_sasrec:
+            seq_repr = self.seq_encoder(history_seq)              # (B, sasrec_hidden_dim)
+        else:
+            # Masked mean pooling — ignore padding tokens (value 0)
+            seq_emb = self.seq_embed(history_seq)                 # (B, L, SE)
+            mask = (history_seq > 0).float().unsqueeze(-1)        # (B, L, 1)
+            seq_repr = (seq_emb * mask).sum(1) / (mask.sum(1) + 1e-9)  # (B, SE)
 
         d_feat = F.relu(self.dense_proj(user_dense))              # (B, DH)
 
-        out = self.mlp(torch.cat([u_emb, seq_pooled, d_feat], dim=-1))
+        out = self.mlp(torch.cat([u_emb, seq_repr, d_feat], dim=-1))
         return F.normalize(out, p=2, dim=-1)                      # (B, out_dim)
 
     def __repr__(self) -> str:
         n = sum(p.numel() for p in self.parameters())
-        return f"UserTower(params={n:,}, output_dim={self.output_dim})"
+        seq_type = "SASRec" if self.use_sasrec else "MeanPool"
+        return f"UserTower(seq={seq_type}, params={n:,}, output_dim={self.output_dim})"
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +237,11 @@ class TwoTowerModel(nn.Module):
         self.output_dim = mc["output_dim"]
         self.temperature = mc["temperature"]
 
+        # Sequence encoder selection: 'mean_pool' (default) or 'sasrec'
+        seq_model = mc.get("seq_model", "mean_pool")
+        use_sasrec = seq_model == "sasrec"
+        sasrec_cfg = mc.get("sasrec", {})
+
         self.user_tower = UserTower(
             n_users=meta["n_users"],
             n_items=meta["n_items"],
@@ -210,6 +251,11 @@ class TwoTowerModel(nn.Module):
             dense_hidden=mc["dense_hidden"],
             output_dim=mc["output_dim"],
             dropout=mc.get("dropout", 0.1),
+            use_sasrec=use_sasrec,
+            sasrec_hidden_dim=sasrec_cfg.get("hidden_dim", 64),
+            sasrec_n_layers=sasrec_cfg.get("n_layers", 2),
+            sasrec_n_heads=sasrec_cfg.get("n_heads", 2),
+            max_seq_len=sasrec_cfg.get("max_seq_len", meta.get("seq_len", 20)),
         )
         self.item_tower = ItemTower(
             n_items=meta["n_items"],
@@ -298,9 +344,10 @@ class TwoTowerModel(nn.Module):
     def __repr__(self) -> str:
         u = sum(p.numel() for p in self.user_tower.parameters())
         i = sum(p.numel() for p in self.item_tower.parameters())
+        seq_type = "SASRec" if self.user_tower.use_sasrec else "MeanPool"
         return (
             f"TwoTowerModel(\n"
-            f"  UserTower : {u:,} params\n"
+            f"  UserTower : {u:,} params  [seq_encoder={seq_type}]\n"
             f"  ItemTower : {i:,} params\n"
             f"  Total     : {u + i:,} params\n"
             f"  output_dim={self.output_dim}, temperature={self.temperature}\n"

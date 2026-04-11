@@ -130,11 +130,15 @@ def ranking_loss_fn(model, batch):
 
 # ── Retrieval ablations ─────────────────────────────────────────────────────
 
-def ablate_retrieval(neg_mode, disable_seq=False, n_epochs=8):
+def ablate_retrieval(neg_mode, disable_seq=False, n_epochs=8, seq_model="mean_pool"):
     lk = build_item_lookup(train_data, val_data, test_data)
     ds = RetrievalDataset(train_data, meta, neg_mode=neg_mode, seed=42)
     loader = DataLoader(ds, batch_size=128, shuffle=True, num_workers=0, drop_last=True)
-    model = TwoTowerModel(meta, ret_cfg).to(DEVICE)
+
+    # Build config with seq_model override
+    cfg = {**ret_cfg, "model": {**ret_cfg["model"], "seq_model": seq_model}}
+    model = TwoTowerModel(meta, cfg).to(DEVICE)
+
     if disable_seq:
         import types, torch.nn.functional as F2
         def _fwd(self_m, uid, user_dense, history_seq, history_len):
@@ -143,6 +147,7 @@ def ablate_retrieval(neg_mode, disable_seq=False, n_epochs=8):
             d = F2.relu(self_m.dense_proj(user_dense))
             return F2.normalize(self_m.mlp(torch.cat([u, z, d], dim=-1)), p=2, dim=-1)
         model.user_tower.forward = types.MethodType(_fwd, model.user_tower)
+
     opt = torch.optim.Adam(model.parameters(), lr=1e-3)
     def loss_fn(m, b):
         ue, ie = m(b)
@@ -236,6 +241,21 @@ def main():
     din_auc, din_gauc = ablate_ranking("din")
     results["din_auc"] = din_auc; results["din_gauc"] = din_gauc
     logger.info(f"  DIN AUC={din_auc:.4f}")
+
+    logger.info("Ablation 6/6: SASRec vs Mean-Pool (in-batch, 8 epochs)")
+    r10_mp, r50_mp = ablate_retrieval("in_batch", seq_model="mean_pool")
+    results["meanpool_recall10"] = r10_mp
+    results["meanpool_recall50"] = r50_mp
+    logger.info(f"  MeanPool  Recall@10={r10_mp:.4f}  Recall@50={r50_mp:.4f}")
+
+    r10_sa, r50_sa = ablate_retrieval("in_batch", seq_model="sasrec")
+    results["sasrec_recall10"] = r10_sa
+    results["sasrec_recall50"] = r50_sa
+    logger.info(f"  SASRec    Recall@10={r10_sa:.4f}  Recall@50={r50_sa:.4f}")
+
+    delta10 = r10_sa - r10_mp
+    delta50 = r50_sa - r50_mp
+    logger.info(f"  SASRec delta: Recall@10 {delta10:+.4f} | Recall@50 {delta50:+.4f}")
 
     out = ROOT / "experiments" / "results"
     out.mkdir(parents=True, exist_ok=True)

@@ -248,8 +248,12 @@ def retrieval_loss_fn(
 # Main
 # ---------------------------------------------------------------------------
 
-def main(neg_mode: str = "in_batch") -> None:
+def main(neg_mode: str = "in_batch", seq_model: str = "mean_pool") -> None:
     base_cfg, ret_cfg = _load_configs()
+
+    # Allow CLI to override the seq_model setting from config
+    ret_cfg["model"]["seq_model"] = seq_model
+
     seed = base_cfg["project"]["seed"]
     set_seed(seed)
     device = get_device()
@@ -258,7 +262,10 @@ def main(neg_mode: str = "in_batch") -> None:
     proc_dir = _ROOT / base_cfg["data"]["processed_dir"]
     ckpt_dir = _ROOT / base_cfg["logging"]["checkpoint_dir"]
     log_dir  = _ROOT / base_cfg["logging"]["log_dir"]
-    ckpt_path = str(ckpt_dir / "two_tower_best.pt")
+
+    # Use seq_model name in checkpoint filename so both variants can coexist
+    ckpt_name = f"two_tower_{seq_model}_best.pt"
+    ckpt_path = str(ckpt_dir / ckpt_name)
 
     # Load data
     meta        = load_meta(proc_dir)
@@ -294,8 +301,8 @@ def main(neg_mode: str = "in_batch") -> None:
             optimizer, T_max=ret_cfg["training"]["n_epochs"]
         )
 
-    # TensorBoard
-    writer = SummaryWriter(log_dir=str(log_dir / "two_tower"))
+    # TensorBoard — separate run dir per seq_model for clean comparison
+    writer = SummaryWriter(log_dir=str(log_dir / f"two_tower_{seq_model}"))
 
     k_list = ret_cfg["evaluation"]["top_k"]
     faiss_cfg = ret_cfg["faiss"]
@@ -353,5 +360,9 @@ if __name__ == "__main__":
         "--neg_mode", choices=["in_batch", "random"], default="in_batch",
         help="Negative sampling strategy for retrieval training"
     )
+    parser.add_argument(
+        "--seq_model", choices=["mean_pool", "sasrec"], default="mean_pool",
+        help="Sequence encoder in UserTower: mean_pool (default) or sasrec"
+    )
     args = parser.parse_args()
-    main(neg_mode=args.neg_mode)
+    main(neg_mode=args.neg_mode, seq_model=args.seq_model)
