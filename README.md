@@ -230,52 +230,50 @@ video-recsys-pipeline/
 ## Experiment Results
 
 All models trained on **NVIDIA RTX 5060 Laptop GPU** (8 GB VRAM, PyTorch 2.11 + CUDA 12.8).
-Mock dataset: 500 users, 1,000 items, 15,000 interactions, **14.1% positive rate**.
-
-> **Note on AUC ≈ 0.50**: Expected behavior on mock data — watch_ratio labels are generated independently of features (no real correlation). On real KuaiRec data, DeepFM typically achieves AUC 0.72–0.78.
+Synthetic KuaiRec-schema dataset: 500 users, ~991 items, 15,000 interactions, **37.9% positive rate**.
+Data generator uses **personalized item sampling** (user-category affinity → correlated watch_ratio labels).
 
 ### Retrieval Stage
 
-| Model | Recall@10 | NDCG@10 | Hit@10 | Recall@50 | Epochs |
-|-------|-----------|---------|--------|-----------|--------|
-| Two-Tower (MeanPool, in-batch) | **0.1693** | 0.1258 | 0.2270 | 0.2520 | 30 |
-| Two-Tower (MeanPool, random neg) | 0.1005 | — | — | 0.1730 | 8* |
-| Two-Tower + **SASRec** | — | — | — | — | — |
+| Model | Recall@10 | NDCG@10 | Hit@10 | Recall@50 |
+|-------|-----------|---------|--------|-----------|
+| Two-Tower (MeanPool) | 0.157 | 0.121 | 0.260 | 0.269 |
+| Two-Tower + **SASRec** | **0.177** | **0.146** | **0.278** | **0.328** |
 
-*Ablation run (8 epochs). Full SASRec run: `python src/training/train_retrieval.py --seq_model sasrec`
+SASRec improves Recall@10 by **+12.7%** over mean pooling via causal self-attention.
 
 ### Ranking Stage (CTR Prediction)
 
 | Model | AUC | GAUC | LogLoss | Params |
 |-------|-----|------|---------|--------|
-| **DeepFM** | **0.5075** | **0.5074** | **0.664** | ~1.3M |
-| DIN | 0.4999 | 0.4956 | 0.698 | ~1.2M |
-| **DIEN** | 0.5009 | 0.5019 | 0.676 | ~1.4M |
+| **DeepFM** | **0.5625** | **0.5112** | 1.045 | ~1.3M |
+| DIN | 0.5530 | 0.4964 | 1.013 | ~1.2M |
+| **DIEN** | 0.5582 | 0.5087 | **0.979** | ~1.4M |
 
 ### Multi-Task Stage (MMoE)
 
 | Model | Watch AUC | Like AUC | Watch GAUC | Like GAUC |
 |-------|-----------|----------|------------|-----------|
-| **MMoE** (4 experts) | **0.5272** | **0.5123** | 0.3497¹ | 0.4484¹ |
+| **MMoE** (4 experts) | 0.5009 | **0.5117** | 0.5125 | **0.5195** |
 
-> ¹ Like AUC < 0.5 on mock data: `like` labels (click-based binary) have low correlation with features in synthetic data. On real KuaiRec, MMoE like-AUC typically reaches 0.68–0.72.
-
-### Ablation Study (8 epochs each)
+### Ablation Study
 
 | Retrieval Variant | Recall@10 | Recall@50 | Finding |
 |---|---|---|---|
-| In-batch negatives | 0.0597 | 0.1391 | Efficient but harder to learn |
-| **Random negatives** | **0.1005** | **0.1730** | +68% Recall@10 vs in-batch (8ep) |
-| No sequence features | 0.0416 | 0.0862 | −30% shows sequence is critical |
+| In-batch negatives | 0.0283 | 0.0679 | Strong baseline |
+| Random negatives | 0.0144 | 0.0549 | Worse — less diverse negatives per batch |
+| No sequence features | 0.0055 | 0.0422 | −80% — sequence is critical |
+| MeanPool (full training) | 0.0029 | 0.0286 | Ablation baseline |
+| **SASRec (full training)** | **0.0369** | **0.0740** | +13× over MeanPool ablation |
 
 | Ranking Variant | AUC | GAUC | Finding |
 |---|---|---|---|
-| **DeepFM (full)** | **0.5231** | 0.5086 | FM cross terms help |
-| DeepFM (no FM term) | 0.5173 | 0.4910 | −0.006 AUC without FM |
-| MLP baseline | 0.5080 | 0.5215 | No feature interaction |
-| DIN | 0.4976 | 0.4840 | Better with real data |
+| **DeepFM (full)** | **0.5523** | **0.5175** | FM cross-terms help |
+| DeepFM (no FM term) | 0.5483 | 0.4978 | −0.004 AUC without FM |
+| MLP baseline | 0.5306 | 0.4921 | No feature interaction |
+| DIN | 0.5440 | 0.5122 | Attention improves GAUC |
 
-See [`experiments/results/ablation_report.md`](experiments/results/ablation_report.md) for full analysis.
+Training curves, comparison charts, and ablation bar plots in [`experiments/results/figures/`](experiments/results/figures/).
 
 ---
 

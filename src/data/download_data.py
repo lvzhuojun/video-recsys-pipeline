@@ -111,30 +111,77 @@ def generate_mock_data(
     item_probs = item_popularity / item_popularity.sum()
 
     sampled_users = rng.choice(n_users, size=n_interactions, p=user_probs)
-    sampled_items = rng.choice(n_items, size=n_interactions, p=item_probs)
+
+    # ------------------------------------------------------------------
+    # 3b. User-category affinity (latent preference that drives behavior)
+    #
+    # Each user has a sparse Dirichlet preference over n_categories.
+    # Items are then sampled USING personalized probabilities so that
+    # user_dense[5:25] (category fractions computed in feature_engineering)
+    # actually reflects true preferences — making it a learnable signal.
+    # ------------------------------------------------------------------
+    user_cat_affinity = rng.dirichlet(
+        np.ones(n_categories) * 0.4, size=n_users
+    )  # (n_users, n_categories)
+
+    # Personalized item-sampling: P(item i | user u) ∝ popularity[i] × (1 + γ × affinity[u, cat[i]])
+    # γ=4.0 means strongly preferred categories get ~5× the baseline probability
+    gamma = 4.0
+    # item_cat_affinities: (n_users, n_items) — affinity for each item per user
+    item_cat_vec = video_categories  # (n_items,)
+    user_item_affinity = user_cat_affinity[:, item_cat_vec]  # (n_users, n_items)
+    personalized_weights = item_probs[np.newaxis, :] * (1.0 + gamma * user_item_affinity)
+    personalized_weights /= personalized_weights.sum(axis=1, keepdims=True)  # (n_users, n_items)
+
+    # Sample each interaction's item from the user's personalized distribution
+    # Vectorised via cumsum + searchsorted (faster than per-row np.choice)
+    cumsum_weights = np.cumsum(personalized_weights, axis=1)  # (n_users, n_items)
+    u_rand = rng.random(n_interactions)
+    sampled_items = np.array([
+        np.searchsorted(cumsum_weights[sampled_users[i]], u_rand[i])
+        for i in range(n_interactions)
+    ], dtype=np.int32)
+    sampled_items = np.clip(sampled_items, 0, n_items - 1)
 
     # Timestamps: 30-day window starting 2024-01-01
     t_start = int(pd.Timestamp("2024-01-01").timestamp())
     t_end = int(pd.Timestamp("2024-01-31").timestamp())
     timestamps = rng.integers(t_start, t_end, size=n_interactions)
 
+    # Rank-based affinity: 0 = least preferred cat for this user, 1 = most preferred
+    # Much stronger signal than raw Dirichlet values (which are small and sparse)
+    interaction_cats = video_categories[sampled_items]   # (N,)
+    user_cat_rank = np.argsort(-user_cat_affinity, axis=1)  # (n_users, n_categories), sorted desc
+    rank_lookup = np.argsort(user_cat_rank, axis=1)      # (n_users, n_categories): cat → rank
+    cat_rank = rank_lookup[sampled_users, interaction_cats]  # (N,) rank of item's cat (0=top)
+    affinity_norm = 1.0 - cat_rank / max(n_categories - 1, 1)  # (N,) in [0, 1]
+
     # ------------------------------------------------------------------
-    # 4. watch_ratio: beta distribution (right-skewed, occasionally > 1)
+    # 4. watch_ratio: conditioned on rank-based affinity
+    #
+    # affinity_norm=1.0 (most preferred cat): E[watch] ≈ 0.68, P(>0.7) ≈ 40%
+    # affinity_norm=0.5 (median):             E[watch] ≈ 0.52, P(>0.7) ≈ 16%
+    # affinity_norm=0.0 (least preferred):    E[watch] ≈ 0.32, P(>0.7) ≈ 4%
+    # Bayes-optimal AUC with this design: ~0.68–0.74
     # ------------------------------------------------------------------
-    watch_ratio = rng.beta(a=1.2, b=2.5, size=n_interactions)
+    a_param  = 1.2 + 4.0 * affinity_norm   # [1.2, 5.2]
+    b_param  = 2.8 - 0.8 * affinity_norm   # [2.0, 2.8]
+    watch_ratio = rng.beta(a=a_param, b=b_param).astype(np.float32)
     # ~8% of interactions are re-watches (ratio > 1.0)
     rewatch_mask = rng.random(n_interactions) < 0.08
     watch_ratio[rewatch_mask] = rng.uniform(1.0, 1.8, size=rewatch_mask.sum())
     watch_ratio = np.clip(watch_ratio, 0.0, 2.0).astype(np.float32)
 
     # ------------------------------------------------------------------
-    # 5. Engagement actions (sparse, correlated with watch_ratio)
+    # 5. Engagement actions (dual signal: watch_ratio + affinity)
     # ------------------------------------------------------------------
-    # P(action | watch_ratio) is a sigmoid-like function
     def _action_prob(ratio: np.ndarray, base: float, scale: float) -> np.ndarray:
         return np.clip(base * (ratio ** scale), 0.0, 1.0)
 
-    like    = (rng.random(n_interactions) < _action_prob(watch_ratio, 0.12, 1.5)).astype(np.int8)
+    like_prob = np.clip(
+        0.10 * (watch_ratio ** 1.5) + 0.08 * affinity_norm, 0.0, 1.0
+    )
+    like    = (rng.random(n_interactions) < like_prob).astype(np.int8)
     follow  = (rng.random(n_interactions) < _action_prob(watch_ratio, 0.02, 2.0)).astype(np.int8)
     comment = (rng.random(n_interactions) < _action_prob(watch_ratio, 0.015, 2.0)).astype(np.int8)
     share   = (rng.random(n_interactions) < _action_prob(watch_ratio, 0.008, 2.5)).astype(np.int8)

@@ -14,6 +14,7 @@ Pipeline:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Dict, Tuple
@@ -23,6 +24,14 @@ import torch
 import torch.nn as nn
 import yaml
 from torch.utils.data import DataLoader
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    _MPL = True
+except ImportError:
+    _MPL = False
 from torch.utils.tensorboard import SummaryWriter
 
 _ROOT = Path(__file__).resolve().parent.parent.parent
@@ -240,6 +249,35 @@ def train_model(
         checkpoint_path=ckpt_path,
     )
     writer.close()
+
+    # Save per-epoch history
+    results_dir = _ROOT / base_cfg["logging"]["results_dir"]
+    results_dir.mkdir(parents=True, exist_ok=True)
+    history_path = results_dir / f"{model_name}_history.json"
+    with open(history_path, "w", encoding="utf-8") as f:
+        json.dump(trainer.history, f, indent=2)
+    logger.info(f"Training history saved → {history_path}")
+
+    # Generate training curve plot
+    if _MPL and trainer.history:
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        epochs   = [d["epoch"] for d in trainer.history]
+        aucs     = [d.get("auc", float("nan")) for d in trainer.history]
+        logloss  = [d.get("logloss", float("nan")) for d in trainer.history]
+        t_loss   = [d.get("train_loss", float("nan")) for d in trainer.history]
+        axes[0].plot(epochs, aucs,    "b-o", ms=3, lw=2, label="Val AUC")
+        axes[0].plot(epochs, t_loss,  "r--", ms=3, lw=1.5, label="Train Loss")
+        axes[0].set_title(f"{model_name.upper()} — AUC & Loss")
+        axes[0].legend(); axes[0].grid(alpha=0.3)
+        axes[1].plot(epochs, logloss, "g-s", ms=3, lw=2, label="Val LogLoss")
+        axes[1].set_title(f"{model_name.upper()} — LogLoss")
+        axes[1].legend(); axes[1].grid(alpha=0.3)
+        fig.tight_layout()
+        fig_dir = results_dir / "figures"
+        fig_dir.mkdir(exist_ok=True)
+        plt.savefig(fig_dir / f"{model_name}_training_curves.png", dpi=150, bbox_inches="tight")
+        plt.close()
+        logger.info(f"Training curve saved → {fig_dir / f'{model_name}_training_curves.png'}")
 
     # Test evaluation with best checkpoint
     logger.info(f"Loading best checkpoint for {model_name} test evaluation …")

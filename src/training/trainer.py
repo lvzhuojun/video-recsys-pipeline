@@ -50,6 +50,7 @@ class Trainer:
         self.writer = writer
         self.grad_clip = grad_clip
         self.global_step = 0
+        self.history: list = []   # per-epoch metrics: [{epoch, train_loss, ...}, ...]
 
     # ------------------------------------------------------------------
     # Core training step
@@ -130,6 +131,7 @@ class Trainer:
             train_loss = self.train_one_epoch(train_loader, loss_fn)
             metrics = eval_fn(self)
             metrics["train_loss"] = train_loss
+            self.history.append({"epoch": epoch, **metrics})
 
             if self.writer:
                 self.writer.add_scalar("train/loss", train_loss, epoch)

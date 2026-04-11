@@ -227,7 +227,7 @@ class FeatureEngineer:
         actual_len = len(hist)
         padded = np.zeros(self.seq_len, dtype=np.int32)
         if actual_len > 0:
-            padded[-actual_len:] = hist  # right-align; zeros on the left
+            padded[:actual_len] = hist  # left-align; zeros on the right (causal-attention safe)
         return padded, actual_len
 
     @staticmethod

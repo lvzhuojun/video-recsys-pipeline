@@ -254,6 +254,40 @@ def train_multitask(
     )
     writer.close()
 
+    # Save per-epoch history
+    import json
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        _mpl = True
+    except ImportError:
+        _mpl = False
+    results_dir = _ROOT / base_cfg["logging"]["results_dir"]
+    results_dir.mkdir(parents=True, exist_ok=True)
+    hist_path = results_dir / "mmoe_history.json"
+    with open(hist_path, "w", encoding="utf-8") as f:
+        json.dump(trainer.history, f, indent=2)
+    logger.info(f"Training history saved → {hist_path}")
+
+    if _mpl and trainer.history:
+        epochs     = [d["epoch"] for d in trainer.history]
+        watch_auc  = [d.get("watch_auc",  float("nan")) for d in trainer.history]
+        like_auc   = [d.get("like_auc",   float("nan")) for d in trainer.history]
+        train_loss = [d.get("train_loss", float("nan")) for d in trainer.history]
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        axes[0].plot(epochs, watch_auc, "b-o", ms=3, lw=2, label="Watch AUC")
+        axes[0].plot(epochs, like_auc,  "g--s", ms=3, lw=2, label="Like AUC")
+        axes[0].axhline(0.5, color="gray", ls=":", lw=1)
+        axes[0].set_title("MMoE — Dual-Task AUC"); axes[0].legend(); axes[0].grid(alpha=0.3)
+        axes[1].plot(epochs, train_loss, "r-o", ms=3, lw=2, label="Train Loss")
+        axes[1].set_title("MMoE — Combined Loss"); axes[1].legend(); axes[1].grid(alpha=0.3)
+        fig.tight_layout()
+        fig_dir = results_dir / "figures"
+        fig_dir.mkdir(exist_ok=True)
+        plt.savefig(fig_dir / "mmoe_training_curves.png", dpi=150, bbox_inches="tight")
+        plt.close()
+
     # Test evaluation with best checkpoint
     logger.info("Loading best checkpoint for MMoE test evaluation …")
     trainer.load_checkpoint(ckpt_path)

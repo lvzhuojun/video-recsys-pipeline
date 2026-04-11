@@ -153,6 +153,12 @@ class SASRecEncoder(nn.Module):
 
         # Padding mask: True at positions where history_seq == 0
         key_padding_mask = (history_seq == 0)                          # (B, L)
+        # Guard: if a row is entirely padding, unmask position 0 so softmax
+        # never sees all -inf (which produces NaN in PyTorch MHA).
+        all_pad = key_padding_mask.all(dim=1, keepdim=True)            # (B, 1)
+        key_padding_mask = key_padding_mask & ~all_pad.expand_as(key_padding_mask)
+        # Zero out the embedding at position 0 for those rows so it doesn't add signal
+        x = torch.where(all_pad.unsqueeze(-1), torch.zeros_like(x), x)
 
         for block in self.blocks:
             x = block(x, causal_mask, key_padding_mask)

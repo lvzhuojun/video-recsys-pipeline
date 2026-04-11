@@ -331,6 +331,40 @@ def main(neg_mode: str = "in_batch", seq_model: str = "mean_pool") -> None:
     )
     writer.close()
 
+    # Save per-epoch history
+    import json
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        _mpl = True
+    except ImportError:
+        _mpl = False
+    emb_dir2 = _ROOT / "experiments" / "results"
+    emb_dir2.mkdir(parents=True, exist_ok=True)
+    hist_path = emb_dir2 / f"two_tower_{seq_model}_history.json"
+    with open(hist_path, "w", encoding="utf-8") as f:
+        json.dump(trainer.history, f, indent=2)
+    logger.info(f"Training history saved → {hist_path}")
+
+    if _mpl and trainer.history:
+        monitor_key = ret_cfg["training"].get("monitor", "recall@10")
+        epochs = [d["epoch"] for d in trainer.history]
+        vals   = [d.get(monitor_key, float("nan")) for d in trainer.history]
+        tloss  = [d.get("train_loss", float("nan")) for d in trainer.history]
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        axes[0].plot(epochs, vals,  "b-o", ms=3, lw=2, label=monitor_key)
+        axes[0].set_title(f"Two-Tower ({seq_model}) — {monitor_key}")
+        axes[0].legend(); axes[0].grid(alpha=0.3)
+        axes[1].plot(epochs, tloss, "r--", ms=3, lw=2, label="Train Loss")
+        axes[1].set_title("Train Loss"); axes[1].legend(); axes[1].grid(alpha=0.3)
+        fig.tight_layout()
+        fig_dir = emb_dir2 / "figures"
+        fig_dir.mkdir(exist_ok=True)
+        plt.savefig(fig_dir / f"two_tower_{seq_model}_training_curves.png",
+                    dpi=150, bbox_inches="tight")
+        plt.close()
+
     # Final test evaluation
     logger.info("Loading best checkpoint for test evaluation …")
     trainer.load_checkpoint(ckpt_path)
