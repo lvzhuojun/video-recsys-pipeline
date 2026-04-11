@@ -176,15 +176,17 @@ class RankingDataset(Dataset):
           history_seq, history_len, label
     """
 
-    def __init__(self, data: Dict[str, np.ndarray], meta: dict) -> None:
+    def __init__(self, data: Dict[str, np.ndarray], meta: dict, mtl_mode: bool = False) -> None:
         self.data = data
         self.meta = meta
+        self.mtl_mode = mtl_mode
         n_pos = int((data["labels"] == 1.0).sum())
         logger.info(
             f"RankingDataset | "
             f"samples: {len(data['labels']):,}  "
             f"positive: {n_pos:,}  "
             f"pos_rate: {n_pos/len(data['labels'])*100:.1f}%"
+            + (f"  [MTL mode]" if mtl_mode else "")
         )
 
     def __len__(self) -> int:
@@ -192,7 +194,7 @@ class RankingDataset(Dataset):
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         d = self.data
-        return {
+        sample = {
             "user_id":       torch.tensor(d["user_ids"][idx],      dtype=torch.long),
             "item_id":       torch.tensor(d["item_ids"][idx],      dtype=torch.long),
             "user_dense":    torch.tensor(d["user_dense"][idx],    dtype=torch.float32),
@@ -203,6 +205,14 @@ class RankingDataset(Dataset):
             "history_len":   torch.tensor(d["history_lens"][idx],  dtype=torch.long),
             "label":         torch.tensor(d["labels"][idx],        dtype=torch.float32),
         }
+        if self.mtl_mode:
+            sample["watch_ratio_raw"] = torch.tensor(
+                d["watch_ratio_raw"][idx], dtype=torch.float32
+            )
+            sample["like_label"] = torch.tensor(
+                d["like_labels"][idx], dtype=torch.float32
+            )
+        return sample
 
     def __repr__(self) -> str:
         n = len(self.data["labels"])

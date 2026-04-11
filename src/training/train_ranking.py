@@ -32,6 +32,7 @@ if str(_ROOT) not in sys.path:
 from src.data.dataset import RankingDataset, load_meta, load_split
 from src.evaluation.metrics import compute_auc, compute_gauc, compute_logloss
 from src.models.deepfm import DeepFM
+from src.models.dien import DIEN
 from src.models.din import DIN
 from src.training.trainer import Trainer
 from src.utils.gpu_utils import get_device, log_memory_stats, set_seed
@@ -124,6 +125,27 @@ def make_ranking_loss_fn(pos_weight: float, device: torch.device):
     return loss_fn
 
 
+def make_dien_loss_fn(pos_weight: float, device: torch.device, aux_loss_weight: float = 0.1):
+    """Return a combined ranking + auxiliary loss function for DIEN.
+
+    DIEN uses an auxiliary next-item prediction loss to supervise the
+    interest extractor (GRU), in addition to the standard weighted BCE.
+
+    Args:
+        pos_weight: Weight for positive samples (≈ neg/pos ratio).
+        device: Compute device for the weight tensor.
+        aux_loss_weight: Weight for auxiliary loss term.
+    """
+    ranking_loss_fn = make_ranking_loss_fn(pos_weight, device)
+
+    def loss_fn(model: nn.Module, batch: Dict[str, torch.Tensor]) -> torch.Tensor:
+        ranking_loss = ranking_loss_fn(model, batch)
+        aux_loss = model.compute_aux_loss(batch)
+        return ranking_loss + aux_loss_weight * aux_loss
+
+    return loss_fn
+
+
 # ---------------------------------------------------------------------------
 # Train one model
 # ---------------------------------------------------------------------------
@@ -174,6 +196,8 @@ def train_model(
         model = DeepFM(meta, rank_cfg).to(device)
     elif model_name == "din":
         model = DIN(meta, rank_cfg).to(device)
+    elif model_name == "dien":
+        model = DIEN(meta, rank_cfg).to(device)
     else:
         raise ValueError(f"Unknown model: {model_name}")
     logger.info(f"\n{model}")
@@ -195,7 +219,11 @@ def train_model(
     ckpt_path = str(ckpt_dir / f"{model_name}_best.pt")
 
     writer = SummaryWriter(log_dir=str(log_dir / model_name))
-    loss_fn = make_ranking_loss_fn(tc["pos_weight"], device)
+    if model_name == "dien":
+        aux_loss_weight = rank_cfg["model"]["dien"].get("aux_loss_weight", 0.1)
+        loss_fn = make_dien_loss_fn(tc["pos_weight"], device, aux_loss_weight)
+    else:
+        loss_fn = make_ranking_loss_fn(tc["pos_weight"], device)
 
     def eval_fn(trainer: Trainer) -> Dict[str, float]:
         return evaluate_ranking(trainer.model, val_loader, device)
@@ -243,7 +271,7 @@ def main(model_arg: str = "all") -> None:
     val_data   = load_split(proc_dir, "val")
     test_data  = load_split(proc_dir, "test")
 
-    models_to_train = ["deepfm", "din"] if model_arg == "all" else [model_arg]
+    models_to_train = ["deepfm", "din", "dien"] if model_arg == "all" else [model_arg]
     results = {}
 
     for name in models_to_train:
@@ -272,7 +300,7 @@ def main(model_arg: str = "all") -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model", choices=["deepfm", "din", "all"], default="all",
+        "--model", choices=["deepfm", "din", "dien", "all"], default="all",
         help="Which ranking model to train"
     )
     args = parser.parse_args()

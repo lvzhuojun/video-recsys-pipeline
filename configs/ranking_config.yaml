@@ -20,6 +20,13 @@ model:
     dropout: 0.1
     seq_embed_dim: 32        # target-item attention embedding dim
 
+  # DIEN specific
+  dien:
+    seq_embed_dim: 64        # same as item_embed_dim for clean attention
+    mlp_hidden_dims: [256, 128, 64]
+    dropout: 0.1
+    aux_loss_weight: 0.1
+
 training:
   batch_size: 512
   lr: 1.0e-3

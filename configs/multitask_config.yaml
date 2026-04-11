@@ -1,0 +1,29 @@
+# MMoE Multi-task configuration
+model:
+  user_embed_dim: 64
+  item_embed_dim: 64
+  cat_embed_dim: 16
+  dur_embed_dim: 8
+  mmoe:
+    n_experts: 4
+    expert_hidden_dim: 128
+    expert_output_dim: 64
+    n_tasks: 2
+    task_tower_dims: [128, 64]
+    dropout: 0.1
+    seq_embed_dim: 32
+    attention_hidden_dims: [64, 16]
+
+training:
+  batch_size: 512
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  n_epochs: 30
+  early_stop_patience: 5
+  monitor: watch_auc
+  watch_loss_weight: 1.0
+  like_loss_weight: 0.5
+  scheduler: cosine
+
+evaluation:
+  batch_size: 1024

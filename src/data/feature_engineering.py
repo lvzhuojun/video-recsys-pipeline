@@ -252,15 +252,17 @@ class FeatureEngineer:
             Dict of numpy arrays, one entry per feature.
         """
         n = len(split_df)
-        user_ids      = np.empty(n, dtype=np.int32)
-        item_ids      = np.empty(n, dtype=np.int32)
-        item_category = np.empty(n, dtype=np.int32)
-        item_dur_bkt  = np.empty(n, dtype=np.int32)
-        user_dense    = np.empty((n, self.feat_cfg["user_dense_dim"]), dtype=np.float32)
-        item_dense    = np.empty((n, self.feat_cfg["item_dense_dim"]), dtype=np.float32)
-        history_seqs  = np.zeros((n, self.seq_len), dtype=np.int32)
-        history_lens  = np.zeros(n, dtype=np.int32)
-        labels        = np.empty(n, dtype=np.float32)
+        user_ids        = np.empty(n, dtype=np.int32)
+        item_ids        = np.empty(n, dtype=np.int32)
+        item_category   = np.empty(n, dtype=np.int32)
+        item_dur_bkt    = np.empty(n, dtype=np.int32)
+        user_dense      = np.empty((n, self.feat_cfg["user_dense_dim"]), dtype=np.float32)
+        item_dense      = np.empty((n, self.feat_cfg["item_dense_dim"]), dtype=np.float32)
+        history_seqs    = np.zeros((n, self.seq_len), dtype=np.int32)
+        history_lens    = np.zeros(n, dtype=np.int32)
+        labels          = np.empty(n, dtype=np.float32)
+        watch_ratio_raw = np.empty(n, dtype=np.float32)
+        like_labels     = np.empty(n, dtype=np.float32)
 
         # Track how many interactions each user has been processed so far
         # (to build the correct "before this interaction" sequence)
@@ -270,13 +272,15 @@ class FeatureEngineer:
             uid = int(row.user_id)
             vid = int(row.video_id)
 
-            user_ids[idx]      = uid
-            item_ids[idx]      = vid
-            item_category[idx] = int(row.video_category)
-            item_dur_bkt[idx]  = self._duration_bucket(int(row.video_duration))
-            user_dense[idx]    = self._user_stats.get(uid, self._default_user_feat)
-            item_dense[idx]    = self._item_stats.get(vid, self._default_item_feat)
-            labels[idx]        = 1.0 if row.watch_ratio >= self.pos_thresh else 0.0
+            user_ids[idx]        = uid
+            item_ids[idx]        = vid
+            item_category[idx]   = int(row.video_category)
+            item_dur_bkt[idx]    = self._duration_bucket(int(row.video_duration))
+            user_dense[idx]      = self._user_stats.get(uid, self._default_user_feat)
+            item_dense[idx]      = self._item_stats.get(vid, self._default_item_feat)
+            labels[idx]          = 1.0 if row.watch_ratio >= self.pos_thresh else 0.0
+            watch_ratio_raw[idx] = float(row.watch_ratio)
+            like_labels[idx]     = float(row.like)
 
             pos_in_hist = user_cursor.get(uid, 0)
             seq, seq_len = self._get_history_at(uid, pos_in_hist, seq_map)
@@ -285,15 +289,17 @@ class FeatureEngineer:
             user_cursor[uid]  = pos_in_hist + 1
 
         return {
-            "user_ids":       user_ids,
-            "item_ids":       item_ids,
-            "item_category":  item_category,
-            "item_dur_bkt":   item_dur_bkt,
-            "user_dense":     user_dense,
-            "item_dense":     item_dense,
-            "history_seqs":   history_seqs,
-            "history_lens":   history_lens,
-            "labels":         labels,
+            "user_ids":         user_ids,
+            "item_ids":         item_ids,
+            "item_category":    item_category,
+            "item_dur_bkt":     item_dur_bkt,
+            "user_dense":       user_dense,
+            "item_dense":       item_dense,
+            "history_seqs":     history_seqs,
+            "history_lens":     history_lens,
+            "labels":           labels,
+            "watch_ratio_raw":  watch_ratio_raw,
+            "like_labels":      like_labels,
         }
 
     def _save_split(self, data: Dict[str, np.ndarray], name: str) -> None:
