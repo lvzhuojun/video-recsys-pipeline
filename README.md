@@ -148,22 +148,17 @@ python demo/app.py
 ### Real KuaiRec Data (Optional)
 
 ```bash
-# Download real dataset from https://kuairec.com/
-# Place files in data/raw/kuairec/:
-#   - small_matrix.csv   (1411 users × 3327 videos, ~4.7M rows, fully observed)
-#   - video_features_basic.csv
-#   - user_features_basic.csv
+# Download from Zenodo (no registration required, ~411 MB):
+curl -L https://zenodo.org/records/18164998/files/KuaiRec.zip \
+     -o data/raw/kuairec_real/KuaiRec.zip
+cd data/raw/kuairec_real && unzip KuaiRec.zip && cd ../../..
 
-# Run the KuaiRec preprocessor
-python -c "
-from src.data.kuairec_preprocessor import KuaiRecPreprocessor
-import yaml
-with open('configs/base_config.yaml', encoding='utf-8') as f:
-    cfg = yaml.safe_load(f)
-prep = KuaiRecPreprocessor(cfg)
-prep.preprocess(use_small=True)
-"
-# Then re-run training scripts — real data AUC typically 0.72–0.78
+# Preprocess: sample 300K interactions, remap IDs, run feature engineering
+python src/data/prepare_kuairec_real.py          # small_matrix (default)
+python src/data/prepare_kuairec_real.py --big    # big_matrix
+python src/data/prepare_kuairec_real.py --n 100000  # custom sample size
+
+# Then re-run training scripts — real data AUC typically 0.87–0.88
 ```
 
 ---

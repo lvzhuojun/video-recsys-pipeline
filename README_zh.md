@@ -149,23 +149,17 @@ python demo/app.py
 ### 使用真实 KuaiRec 数据（可选）
 
 ```bash
-# 1. 从 https://kuairec.com/ 下载数据集
-# 2. 将以下文件放置于 data/raw/kuairec/ 目录：
-#    - small_matrix.csv（1411 用户 × 3327 视频，~470 万行，全观测矩阵）
-#    - video_features_basic.csv
-#    - user_features_basic.csv
+# 从 Zenodo 下载（无需注册，约 411 MB）：
+curl -L https://zenodo.org/records/18164998/files/KuaiRec.zip \
+     -o data/raw/kuairec_real/KuaiRec.zip
+cd data/raw/kuairec_real && unzip KuaiRec.zip && cd ../../..
 
-# 3. 运行预处理器
-python -c "
-from src.data.kuairec_preprocessor import KuaiRecPreprocessor
-import yaml
-with open('configs/base_config.yaml', encoding='utf-8') as f:
-    cfg = yaml.safe_load(f)
-prep = KuaiRecPreprocessor(cfg)
-prep.preprocess(use_small=True)
-"
+# 预处理：采样 30 万条交互、重映射 ID、运行特征工程
+python src/data/prepare_kuairec_real.py          # 使用 small_matrix（默认）
+python src/data/prepare_kuairec_real.py --big    # 使用 big_matrix
+python src/data/prepare_kuairec_real.py --n 100000  # 自定义采样数量
 
-# 4. 重新运行训练脚本（真实数据上 DeepFM AUC 通常 0.72–0.78）
+# 然后重新运行训练脚本（真实数据上 AUC 通常 0.87–0.88）
 ```
 
 ---
@@ -183,7 +177,7 @@ video-recsys-pipeline/
 ├── src/
 │   ├── data/
 │   │   ├── download_data.py         # Mock 数据生成（KuaiRec schema）
-│   │   ├── kuairec_preprocessor.py  # 真实 KuaiRec 数据适配器
+│   │   ├── prepare_kuairec_real.py  # 真实 KuaiRec 2.0 数据预处理
 │   │   ├── feature_engineering.py   # 时序切分 + 特征计算（防数据穿越）
 │   │   └── dataset.py               # RetrievalDataset / RankingDataset（mtl_mode）
 │   ├── models/
