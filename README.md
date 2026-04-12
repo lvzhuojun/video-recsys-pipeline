@@ -3,7 +3,7 @@
 <h1>video-recsys-pipeline</h1>
 
 <p><strong>Industrial-grade two-stage video recommendation system</strong><br>
-Targeting TikTok / Kuaishou / JD ML Engineer internship roles</p>
+From raw interactions to online serving — built and trained from scratch</p>
 
 [![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.11%2Bcu128-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
@@ -18,7 +18,7 @@ Targeting TikTok / Kuaishou / JD ML Engineer internship roles</p>
 
 ## Overview
 
-A complete, production-inspired recommendation pipeline built from scratch, covering the full two-stage architecture used at Kuaishou, TikTok, and Alibaba:
+A complete two-stage recommendation pipeline built from scratch, covering the full recall → ranking → serving architecture common in large-scale video platforms:
 
 ```
 User Request → [Recall Stage] Two-Tower / SASRec → Faiss ANN → top-K candidates
@@ -26,13 +26,12 @@ User Request → [Recall Stage] Two-Tower / SASRec → Faiss ANN → top-K candi
              → [Serving] FastAPI REST endpoint with in-memory session cache
 ```
 
-**Why this project stands out:**
-- 6 production models: Two-Tower, SASRec, DeepFM, DIN, DIEN, MMoE — all with paper citations
-- Real GPU training on RTX 5060 (Blackwell sm_120, CUDA 12.8)
-- Ablation experiments with 5+ controlled comparisons
+**Highlights:**
+- 6 production models implemented: Two-Tower, SASRec, DeepFM, DIN, DIEN, MMoE — all paper-backed
+- Real GPU training on RTX 5060 (Blackwell sm_120, CUDA 12.8) with real KuaiRec 2.0 data
+- Ablation experiments with 5+ controlled comparisons across architectures
 - FastAPI serving layer with session-based feedback loop
 - 61 unit + integration tests, all passing
-- Deep-dive [learning guide](docs/LEARNING_GUIDE.md) with interview Q&A for TikTok/JD roles
 
 ---
 
@@ -214,7 +213,7 @@ video-recsys-pipeline/
 ├── demo/
 │   └── app.py                       # Gradio 5 web demo
 ├── docs/
-│   └── LEARNING_GUIDE.md            # 10-chapter deep-dive (includes SASRec, interview Q&A)
+│   └── LEARNING_GUIDE.md            # Technical deep-dive notes (local only, not tracked)
 ├── tests/                           # 61 tests (pytest)
 │   ├── test_models.py
 │   ├── test_dien.py
@@ -372,5 +371,5 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 <div align="center">
-<sub>Built with PyTorch · Trained on RTX 5060 · Designed for TikTok / Kuaishou / JD internship interviews</sub>
+<sub>Built with PyTorch · Trained on RTX 5060 · KuaiRec 2.0 · MIT License</sub>
 </div>

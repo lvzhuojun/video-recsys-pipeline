@@ -48,3 +48,6 @@ flagged/
 
 # TensorBoard
 runs/
+
+# Private notes (kept locally, not tracked)
+docs/LEARNING_GUIDE.md

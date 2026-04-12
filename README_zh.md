@@ -3,7 +3,7 @@
 <h1>video-recsys-pipeline</h1>
 
 <p><strong>工业级两阶段视频推荐系统</strong><br>
-对标快手 / 抖音 / 京东 ML Engineer 实习岗位</p>
+从原始交互数据到在线服务的完整实现</p>
 
 [![Python](https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.11%2Bcu128-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
@@ -18,7 +18,7 @@
 
 ## 项目概述
 
-从零构建的完整推荐系统 pipeline，覆盖快手、抖音、阿里巴巴工业级推荐系统的两阶段架构：
+从零构建的完整推荐系统 pipeline，覆盖大规模视频平台的两阶段召回-排序架构：
 
 ```
 用户请求 → [召回阶段] Two-Tower / SASRec → Faiss 近似最近邻 → top-K 候选集
@@ -27,12 +27,11 @@
 ```
 
 **项目亮点：**
-- 6 个工业级模型：Two-Tower、SASRec、DeepFM、DIN、DIEN、MMoE，全部带论文引用
-- RTX 5060 真机 GPU 训练（Blackwell sm_120，CUDA 12.8）
+- 6 个工业级模型从零实现：Two-Tower、SASRec、DeepFM、DIN、DIEN、MMoE，全部带论文引用
+- 使用真实 KuaiRec 2.0 数据集在 RTX 5060（Blackwell sm_120，CUDA 12.8）上 GPU 训练
 - 消融实验：5+ 组对照，量化各模块贡献
 - FastAPI 在线服务层，含用户会话反馈闭环
 - 61 个单元 + 集成测试，全部通过
-- 深度教学文档 [LEARNING_GUIDE.md](docs/LEARNING_GUIDE.md)，含 TikTok/京东 面试 Q&A
 
 ---
 
@@ -216,7 +215,7 @@ video-recsys-pipeline/
 ├── demo/
 │   └── app.py                       # Gradio 5 Web Demo
 ├── docs/
-│   └── LEARNING_GUIDE.md            # 深度教学文档（10 章节，含面试 Q&A）
+│   └── LEARNING_GUIDE.md            # 技术深度分析笔记（本地保留，未纳入版本控制）
 ├── tests/                           # 61 个测试（pytest）
 │   ├── test_models.py               # TwoTower / SASRec / DeepFM / DIN
 │   ├── test_dien.py                 # DIEN + AUGRU 单元测试
@@ -336,7 +335,7 @@ python -m pytest tests/test_multitask.py -v   # MMoE + MTL 数据集测试
 
 ---
 
-## 关键设计决策（面试常问）
+## 关键设计决策
 
 | 问题 | 本项目的做法 | 原因 |
 |------|------------|------|
@@ -369,5 +368,5 @@ MIT License — 详见 [LICENSE](LICENSE)。
 ---
 
 <div align="center">
-<sub>基于 PyTorch 构建 · RTX 5060 GPU 训练 · 面向抖音 / 快手 / 京东 ML 实习面试</sub>
+<sub>基于 PyTorch 构建 · RTX 5060 GPU 训练 · KuaiRec 2.0 · MIT License</sub>
 </div>
